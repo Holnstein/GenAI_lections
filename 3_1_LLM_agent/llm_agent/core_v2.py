@@ -8,6 +8,7 @@ from decouple import config
 from .tool_calculator import CalculatorTool
 from .tool_websearch import WebSearchTool
 from .tool_pdfinfo import PDFInfoTool
+from .tool_sql_query import SQLQueryTool
 
 class LLMAgent:
     """
@@ -15,8 +16,8 @@ class LLMAgent:
     Поддерживает как OpenRouter API, так и локальный Ollama.
     """
 
-    def __init__(self, model: str = "tngtech/deepseek-r1t2-chimera", local: bool = False, 
-                 ollama_base_url: str = "http://localhost:11434", ollama_model: str = "qwen3:0.6b"):
+    def __init__(self, model: str = "tngtech/deepseek-r1t2-chimera", local: bool = False,
+                    ollama_base_url: str = None, ollama_model: str = None):
         """
         Инициализирует агента.
         
@@ -27,8 +28,8 @@ class LLMAgent:
             ollama_model (str): Название модели в Ollama.
         """
         self.local = local
-        self.ollama_base_url = ollama_base_url
-        self.ollama_model = ollama_model
+        self.ollama_base_url = ollama_base_url or config("OLLAMA_BASE_URL", default="http://localhost:11434")
+        self.ollama_model = ollama_model or config("OLLAMA_MODEL", default="qwen3.5:0.8b")
         
         if not self.local:
             self.api_key = config('OPENROUTER_API_KEY')
@@ -37,13 +38,19 @@ class LLMAgent:
         else:
             self.api_key = None
             self.url = f"{self.ollama_base_url}/v1/chat/completions"
-            self.model = ollama_model
+            self.model = ollama_model or config("OLLAMA_MODEL", default="qwen3.5:0.8b")
         
         # Создаем экземпляры инструментов
         self.tools = {
             "calculator": CalculatorTool(),
             "web_search": WebSearchTool(),
             "pdf_info": PDFInfoTool(),
+            "sql_query": SQLQueryTool(
+                local=self.local,
+                ollama_base_url=self.ollama_base_url,
+                ollama_model=self.ollama_model,
+                auto_create_schema=True,  # Автоматическое создание тестовой таблицы
+            ),
         }
         self.conversation_history = []
     
@@ -85,9 +92,16 @@ class LLMAgent:
         # Системный промпт, который объясняет агенту его роль и формат ответа
         system_prompt = f"""
         You are a helpful AI planning assistant. Analyze the user's request and decide if you need to use any tools.
+        
+        CRITICAL RULES FOR TOOL SELECTION:
+        1. For ANY question about data in a database (customers, users, orders, etc.), ALWAYS use "sql_query"
         Available tools:
         - **calculator**: For any math-related questions (numbers, calculations). Use it with the full expression.
         - **web_search**: For finding any information about the real world (current events, facts, definitions). Use it with the user's question or a clear search query. USE ONLY RUSSIAN LANGUAGE QUERIES in this tool.
+        - **sql_query**: For querying a PostgreSQL database using natural language. Use it when the user asks about data in the database, like "show all customers", "find clients from Moscow", "how many users are over 30". The tool will automatically convert the question to SQL.
+        CRITICAL: The input to this tool must be the user's original question in Russian/English, NOT SQL!
+        # Example: if user asks "Покажи имена и email всех клиентов", the input should be "Покажи имена и email всех клиентов"
+        input MUST be the original user question, NEVER write SQL
         - **pdf_info**: For extracting information from PDF files (metadata, page count, text content). Use it with a local file path or a URL to a PDF file.
         Your response MUST be ONLY a JSON object of the following format.
         If one or more tools are needed to answer, return JSON of this structure:
@@ -109,6 +123,7 @@ class LLMAgent:
             ]
         }
         
+        llm_text = ""
         try:
             # Для Ollama может потребоваться дополнительная настройка
             if self.local:
