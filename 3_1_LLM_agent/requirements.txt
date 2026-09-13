@@ -1,7 +1,10 @@
 # 3_1_LLM_agent/requirements.txt
-requests
-python-decouple
-ddgs
-pytest
 pypdf
 pdfplumber
+requests
+psycopg2-binary
+python-decouple
+pytest
+pytest-cov
+coverage
+ddgs
